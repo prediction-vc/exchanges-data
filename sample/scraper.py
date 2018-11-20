@@ -8,7 +8,6 @@ import datetime
 import smtplib
 import sys
 import config
-from sqlalchemy import create_engine
 
 
 class Connection:
@@ -20,15 +19,6 @@ class Connection:
                               db=config.DATABASE_CONFIG['dbname'],
                               port=config.DATABASE_CONFIG['port'],
                               charset='utf8')
-        self.engine = create_engine(
-            "mysql+mysqldb://"
-            + config.DATABASE_CONFIG['user']
-            + ":"
-            + config.DATABASE_CONFIG['password']
-            + "@" + config.DATABASE_CONFIG['host']
-            + "/"
-            + config.DATABASE_CONFIG['dbname'],
-            encoding="utf-8")
         self.c = self.db.cursor()
 
 
@@ -56,7 +46,7 @@ class Exchange:
                     timew = datetime.datetime.fromtimestamp((data_t[0] / 1000)).strftime('%Y-%m-%d %H:%M:%S.%f')
 
                     self.data[coin] = {'open_price': data_t[1], 'high_price': data_t[2], 'low_price': data_t[3],
-                            'close_price': data_t[4], 'volume': data_t[5], 'times': timew}
+                                       'close_price': data_t[4], 'volume': data_t[5], 'times': timew}
 
                     self.is_live = True  # the exchange is online
 
@@ -111,6 +101,15 @@ def main():
         try:
             exch = Exchange(config.EXCHANGES[x])
             exchanges[config.EXCHANGES[x]] = exch
+            exchange_table = ("CREATE TABLE IF NOT EXISTS exchange_" + exch.name +
+                              """ (token varchar(15),
+                              open decimal(12,6),
+                              high decimal(12,6),
+                              low decimal(12,6),
+                              close decimal(12,6),
+                              volume decimal(20,6),
+                              time datetime )""")
+            conn.c.execute(exchange_table)
             for t in config.TOKENS:
                 try:
                     if not open_price.get(t, 0):
@@ -126,7 +125,23 @@ def main():
                     if not live_num.get(t, 0):
                         live_num[t] = 0
                     exch.minute_transfer(t)
+                    timestamp = datetime.datetime.now()
                     if exch.is_live and exch.data.get(t, {}):
+
+                        """ first insert price for the token into the particular exchange table"""
+                        conn.c.execute("INSERT IGNORE INTO exchange_" + exch.name +
+                                       """ (token, open, high, low, close, volume, time)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                                       (t,
+                                        exch.data[t]['open_price'],
+                                        exch.data[t]['high_price'],
+                                        exch.data[t]['low_price'],
+                                        exch.data[t]['close_price'],
+                                        exch.data[t]['volume'],
+                                        timestamp))
+                        conn.db.commit()
+
+                        """ add price values to get average on all exchanges later for particular token"""
                         open_price[t] += exch.data[t]['open_price']
                         high_price[t] += exch.data[t]['high_price']
                         low_price[t] += exch.data[t]['low_price']
@@ -164,7 +179,8 @@ def main():
             conn.db.commit()
         except ConnectionError:
             logging.error("Error inserting prices row for " + t)
-
+    conn.c.close()
+    conn.db.close()
 
 main()
 
